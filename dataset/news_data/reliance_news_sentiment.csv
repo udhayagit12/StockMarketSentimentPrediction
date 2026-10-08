@@ -1,0 +1,11 @@
+Date,News,Sentiment,Confidence,Sentiment_Score
+2025-01-02,Reliance Industries announces expansion of its renewable energy business.,positive,0.5438109040260315,0.5438109040260315
+2025-01-03,Reliance Industries shares gain after positive market outlook.,positive,0.9347304105758667,0.9347304105758667
+2025-01-06,Reliance Industries faces pressure as broader markets decline.,negative,0.9685195088386536,-0.9685195088386536
+2025-01-07,Reliance Industries reports strong demand across its businesses.,positive,0.9535160660743713,0.9535160660743713
+2025-01-08,Investors remain cautious about Reliance Industries amid market volatility.,negative,0.9252660274505615,-0.9252660274505615
+2025-01-09,Reliance Industries receives positive expectations from analysts.,positive,0.9494946002960205,0.9494946002960205
+2025-01-10,Reliance Industries announces a major technology investment.,neutral,0.8001734018325806,0.0
+2025-01-13,Reliance Industries shares decline amid weak market sentiment.,negative,0.9694668054580688,-0.9694668054580688
+2025-01-14,Reliance Industries reports improving business performance.,positive,0.9555558562278748,0.9555558562278748
+2025-01-15,Reliance Industries attracts strong investor interest.,positive,0.9215673208236694,0.9215673208236694
