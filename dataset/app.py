@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from pathlib import Path
+from io import BytesIO
 
 
 # ============================================================
@@ -53,31 +54,84 @@ DAILY_SENTIMENT_FILE = NEWS_DIR / "reliance_daily_sentiment_2025.csv"
 st.markdown(
     """
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-    .main-title {
-        font-size: 42px;
-        font-weight: 700;
-        margin-bottom: 5px;
+    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+
+    /* Layout */
+    .block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: 1300px; }
+    #MainMenu, footer { visibility: hidden; }
+
+    /* Hero header */
+    .hero {
+        padding: 28px 32px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 55%, #EC4899 100%);
+        color: #fff;
+        margin-bottom: 28px;
+        box-shadow: 0 10px 30px rgba(79,70,229,0.25);
     }
+    .hero h1 { font-size: 36px; font-weight: 700; margin: 0 0 6px 0; color: #fff; }
+    .hero p  { font-size: 16px; margin: 0; opacity: 0.9; }
 
-    .subtitle {
-        font-size: 18px;
-        color: #777;
-        margin-bottom: 25px;
-    }
-
-    .metric-card {
+    /* Metric cards */
+    div[data-testid="stMetric"] {
+        background: rgba(128,128,128,0.08);
+        border: 1px solid rgba(128,128,128,0.2);
+        border-left: 5px solid #6366F1;
         border-radius: 12px;
-        padding: 15px;
-        border: 1px solid rgba(128,128,128,0.25);
+        padding: 16px 18px;
+        transition: transform .15s ease, box-shadow .15s ease;
+    }
+    div[data-testid="stMetric"]:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 8px 20px rgba(0,0,0,0.12);
+    }
+    div[data-testid="stMetricLabel"] { font-size: 13px; opacity: .75; font-weight: 500; }
+    div[data-testid="stMetricValue"] { font-size: 28px; font-weight: 700; }
+
+    /* Headings */
+    h2 { font-weight: 700 !important; letter-spacing: -0.3px; }
+    h3 {
+        font-weight: 600 !important;
+        padding-left: 10px;
+        border-left: 4px solid #7C3AED;
+        margin-top: 1.5rem !important;
     }
 
-    .section-title {
-        font-size: 25px;
+    /* Sidebar */
+    section[data-testid="stSidebar"] { border-right: 1px solid rgba(128,128,128,0.2); }
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label {
+        padding: 10px 14px;
+        border-radius: 10px;
+        margin-bottom: 4px;
+        border: 1px solid transparent;
+        transition: all .15s ease;
+    }
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
+        background: rgba(99,102,241,0.12);
+    }
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) {
+        background: rgba(99,102,241,0.18);
+        border-color: #6366F1;
         font-weight: 600;
-        margin-top: 20px;
     }
 
+    /* Tables, alerts, buttons */
+    div[data-testid="stDataFrame"] {
+        border: 1px solid rgba(128,128,128,0.2);
+        border-radius: 12px;
+        overflow: hidden;
+    }
+    div[data-testid="stAlert"] { border-radius: 12px; }
+    .stDownloadButton button {
+        border-radius: 10px;
+        font-weight: 600;
+        border: 1px solid #6366F1;
+    }
+    .stDownloadButton button:hover { background: #6366F1; color: #fff; border-color: #6366F1; }
+
+    hr { margin: 1.5rem 0 !important; }
     </style>
     """,
     unsafe_allow_html=True
@@ -124,17 +178,68 @@ daily_sentiment_df = load_csv(DAILY_SENTIMENT_FILE)
 
 
 # ============================================================
-# CHECK MODEL DATASET
+# UPLOAD HELPERS
 # ============================================================
 
-if model_df is None:
+KNOWN_COLUMNS = [
+    "Date", "Open", "High", "Low", "Close", "Volume",
+    "MA20", "MA50", "RSI", "Volatility", "Daily_Return",
+    "Daily_Sentiment", "News_Count", "Target_Next_Close",
+    "Sentiment", "Sentiment_Score", "Confidence", "News",
+    "Actual", "Actual_Close", "Actual_Close_Price",
+    "Predicted", "Predicted_Close", "Predicted_Close_Price", "Prediction"
+]
 
-    st.error(
-        "Model dataset was not found.\n\n"
-        f"Expected location:\n{MODEL_DATASET}"
+NUMERIC_COLUMNS = [
+    c for c in KNOWN_COLUMNS if c not in ("Date", "Sentiment", "News")
+]
+
+
+def has(df, *cols):
+    """True if df has every column and each holds at least one non-null value."""
+    return df is not None and all(
+        c in df.columns and df[c].notna().any() for c in cols
     )
 
-    st.stop()
+
+@st.cache_data
+def prepare_uploaded(raw_bytes):
+    try:
+        df = pd.read_csv(BytesIO(raw_bytes))
+    except pd.errors.EmptyDataError:
+        raise ValueError("the file is empty.")
+    except Exception as e:
+        raise ValueError(f"the file could not be read as CSV ({e}).")
+
+    if df.empty:
+        raise ValueError("the file has headers but no data rows.")
+
+    # Case-insensitive match to known column names (e.g. "close" -> "Close")
+    df.columns = [str(c).strip() for c in df.columns]
+    lookup = {c.lower(): c for c in KNOWN_COLUMNS}
+    df = df.rename(
+        columns={c: lookup[c.lower()] for c in df.columns if c.lower() in lookup}
+    )
+    df = df.loc[:, ~df.columns.duplicated()].copy()
+
+    notes = []
+
+    if "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        bad = int(df["Date"].isna().sum())
+        if bad:
+            notes.append(f"{bad} row(s) with invalid dates were skipped.")
+            df = df.dropna(subset=["Date"])
+        df = df.sort_values("Date")
+
+    for c in NUMERIC_COLUMNS:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    if df.empty:
+        raise ValueError("no valid rows remain after removing invalid dates.")
+
+    return df.reset_index(drop=True), notes
 
 
 # ============================================================
@@ -154,6 +259,85 @@ page = st.sidebar.radio(
         "📋 Data Explorer"
     ]
 )
+
+st.sidebar.divider()
+
+# --------------------------------------------------------
+# DATASET SOURCE (ORIGINAL / UPLOADED)
+# --------------------------------------------------------
+
+st.sidebar.markdown("### 🗂️ Dataset")
+
+original_available = model_df is not None
+
+data_source = st.sidebar.radio(
+    "Data source",
+    ["Original dataset", "Uploaded CSV"] if original_available else ["Uploaded CSV"],
+    key="data_source"
+)
+
+uploaded_file = st.sidebar.file_uploader(
+    "Upload replacement CSV",
+    type=["csv"],
+    key="dataset_upload"
+)
+
+using_uploaded = False
+uploaded_df = None
+
+if data_source == "Uploaded CSV":
+    if uploaded_file is None:
+        st.sidebar.info("Upload a CSV file to use it.")
+    else:
+        try:
+            uploaded_df, upload_notes = prepare_uploaded(uploaded_file.getvalue())
+            using_uploaded = True
+            for note in upload_notes:
+                st.sidebar.warning(note)
+        except ValueError as e:
+            st.sidebar.error(f"Invalid upload: {e}")
+
+if not using_uploaded and not original_available:
+    st.error(
+        "Original dataset was not found.\n\n"
+        f"Expected location:\n{MODEL_DATASET}\n\n"
+        "Upload a CSV from the sidebar to continue."
+    )
+    st.stop()
+
+if using_uploaded:
+
+    up_actual = next(
+        (c for c in ["Actual", "Actual_Close", "Actual_Close_Price", "Close"]
+         if has(uploaded_df, c)), None
+    )
+    up_pred = next(
+        (c for c in ["Predicted", "Predicted_Close", "Predicted_Close_Price", "Prediction"]
+         if has(uploaded_df, c)), None
+    )
+
+    st.sidebar.caption(f"Active: uploaded file ({uploaded_file.name})")
+
+    with st.sidebar.expander("Dataset compatibility"):
+        st.caption(f"{len(uploaded_df):,} rows × {uploaded_df.shape[1]} columns")
+        checks = {
+            "Price chart (Date, Close)": has(uploaded_df, "Date", "Close"),
+            "Moving averages (Close + MA20/MA50)": has(uploaded_df, "Date", "Close")
+                and (has(uploaded_df, "MA20") or has(uploaded_df, "MA50")),
+            "RSI": has(uploaded_df, "Date", "RSI"),
+            "Volatility": has(uploaded_df, "Date", "Volatility"),
+            "Volume": has(uploaded_df, "Date", "Volume"),
+            "Sentiment": has(uploaded_df, "Sentiment")
+                or has(uploaded_df, "Date", "Sentiment_Score")
+                or has(uploaded_df, "Date", "Daily_Sentiment")
+                or has(uploaded_df, "Date", "News_Count"),
+            "Actual vs predicted": up_actual is not None
+                and up_pred is not None and has(uploaded_df, "Date"),
+        }
+        for label, ok in checks.items():
+            st.write(("✅ " if ok else "❌ ") + label)
+else:
+    st.sidebar.caption("Active: original dataset")
 
 st.sidebar.divider()
 
@@ -186,23 +370,256 @@ st.sidebar.caption(
 # ============================================================
 
 st.markdown(
-    '<div class="main-title">📈 Reliance Stock Intelligence</div>',
+    """
+    <div class="hero">
+        <h1>📈 Reliance Stock Intelligence</h1>
+        <p>Stock Market Sentiment Analysis + Next-Day Price Prediction</p>
+    </div>
+    """,
     unsafe_allow_html=True
 )
 
-st.markdown(
-    '<div class="subtitle">'
-    'Stock Market Sentiment Analysis + Next-Day Price Prediction'
-    '</div>',
-    unsafe_allow_html=True
-)
+
+# ============================================================
+# UPLOADED DATASET PAGES
+# (original pages below run only when the original dataset is active)
+# ============================================================
+
+if using_uploaded:
+
+    ud = uploaded_df
+
+    # ---------------- OVERVIEW ----------------
+    if page == "🏠 Overview":
+
+        st.header("🏠 Project Overview")
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Rows", f"{len(ud):,}")
+        col2.metric("Columns", f"{ud.shape[1]}")
+
+        if has(ud, "Close"):
+            col3.metric("Latest Close", f"{ud['Close'].dropna().iloc[-1]:,.2f}")
+
+        if has(ud, "Date"):
+            st.caption(
+                f"Date range: {ud['Date'].min():%Y-%m-%d} to {ud['Date'].max():%Y-%m-%d}"
+            )
+
+        st.info(
+            "MAE, RMSE, R² and the model comparison belong to the original "
+            "Reliance model, so they are hidden for uploaded data. "
+            "The model has not been retrained or validated on this file."
+        )
+
+    # ---------------- STOCK ANALYSIS ----------------
+    elif page == "📈 Stock Analysis":
+
+        st.header("📈 Stock Analysis")
+
+        if not has(ud, "Date", "Close"):
+            st.warning(
+                "Stock charts need valid `Date` and `Close` columns, which were "
+                "not found. Use Data Explorer to browse this dataset."
+            )
+        else:
+            min_date = ud["Date"].min().date()
+            max_date = ud["Date"].max().date()
+
+            selected_dates = st.date_input(
+                "Select date range",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date
+            )
+
+            fdf = ud
+            if isinstance(selected_dates, tuple) and len(selected_dates) == 2:
+                fdf = ud[
+                    (ud["Date"] >= pd.Timestamp(selected_dates[0]))
+                    & (ud["Date"] <= pd.Timestamp(selected_dates[1]))
+                ]
+
+            if fdf.empty:
+                st.warning("No rows in the selected date range.")
+            else:
+                for title, cols, kind, needed in [
+                    ("💰 Closing Price", ["Close"], "line", 1),
+                    ("📊 Moving Averages", ["Close", "MA20", "MA50"], "line", 2),
+                    ("📉 RSI", ["RSI"], "line", 1),
+                    ("📊 Volatility", ["Volatility"], "line", 1),
+                    ("📦 Trading Volume", ["Volume"], "bar", 1),
+                ]:
+                    present = [c for c in cols if has(fdf, c)]
+                    st.subheader(title)
+
+                    if len(present) < needed:
+                        missing = ", ".join(c for c in cols if c not in present)
+                        st.info(f"Skipped. Missing or empty column(s): {missing}")
+                    else:
+                        chart = st.bar_chart if kind == "bar" else st.line_chart
+                        chart(fdf.set_index("Date")[present])
+
+                st.subheader("📋 Stock Data")
+                st.dataframe(
+                    fdf.tail(50),
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+    # ---------------- SENTIMENT ANALYSIS ----------------
+    elif page == "📰 Sentiment Analysis":
+
+        st.header("📰 Financial News Sentiment Analysis")
+
+        has_label = has(ud, "Sentiment")
+        has_score = has(ud, "Date", "Sentiment_Score")
+        has_daily = has(ud, "Date", "Daily_Sentiment")
+        has_count = has(ud, "Date", "News_Count")
+
+        if not (has_label or has_score or has_daily or has_count):
+            st.warning(
+                "No sentiment data found. Needs `Sentiment`, `Sentiment_Score`, "
+                "`Daily_Sentiment` or `News_Count` (trends also need `Date`). "
+                "Sentiment is not computed for uploaded data."
+            )
+        else:
+            if has_label:
+                labels = ud["Sentiment"].astype(str).str.lower()
+                counts = {
+                    "Positive": int((labels == "positive").sum()),
+                    "Neutral": int((labels == "neutral").sum()),
+                    "Negative": int((labels == "negative").sum()),
+                }
+
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Total Articles", int(ud["Sentiment"].notna().sum()))
+                col2.metric("Positive", counts["Positive"])
+                col3.metric("Neutral", counts["Neutral"])
+                col4.metric("Negative", counts["Negative"])
+
+                st.subheader("📊 Sentiment Distribution")
+                st.bar_chart(pd.Series(counts), color="#6366F1")
+
+            for ok, title, column, kind in [
+                (has_score, "📈 Sentiment Score", "Sentiment_Score", "line"),
+                (has_daily, "📅 Daily Sentiment Trend", "Daily_Sentiment", "line"),
+                (has_count, "📰 Daily News Volume", "News_Count", "bar"),
+            ]:
+                if ok:
+                    st.subheader(title)
+                    chart = st.bar_chart if kind == "bar" else st.line_chart
+                    chart(ud.dropna(subset=[column]).set_index("Date")[column])
+
+            sentiment_cols = [
+                c for c in ["Date", "News", "Sentiment", "Confidence",
+                            "Sentiment_Score", "Daily_Sentiment", "News_Count"]
+                if c in ud.columns
+            ]
+
+            st.subheader("🗞️ Sentiment Data")
+            st.dataframe(
+                ud[sentiment_cols].tail(30),
+                use_container_width=True,
+                hide_index=True
+            )
+
+    # ---------------- PREDICTION ----------------
+    elif page == "🤖 Prediction":
+
+        st.header("🤖 Next-Day Price Prediction")
+
+        if up_actual is None or up_pred is None or not has(ud, "Date"):
+            st.warning(
+                "No actual vs predicted values found. This needs `Date`, an actual "
+                "column (`Actual`, `Actual_Close`, ...) and a predicted column "
+                "(`Predicted`, `Predicted_Close`, ...)."
+            )
+            st.info(
+                "The Random Forest model is not retrained or applied to uploaded "
+                "data. Predictions require compatible features and a separately "
+                "trained or validated model."
+            )
+        else:
+            pdf = ud[["Date", up_actual, up_pred]].dropna().set_index("Date")
+            pdf.columns = ["Actual", "Predicted"]
+
+            if pdf.empty:
+                st.warning("Actual and predicted columns have no overlapping values.")
+            else:
+                st.caption(
+                    "Values come from the uploaded file. No model metrics are "
+                    "shown because the model was not run on this data."
+                )
+
+                st.subheader("📈 Actual vs Predicted Price")
+                st.line_chart(pdf, color=["#6366F1", "#F43F5E"])
+
+                st.subheader("📉 Prediction Error")
+                st.line_chart(
+                    (pdf["Actual"] - pdf["Predicted"]).rename("Prediction_Error"),
+                    color="#F43F5E"
+                )
+
+                st.subheader("📋 Prediction Results")
+                st.dataframe(
+                    pdf.reset_index().tail(50),
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+    # ---------------- FEATURE IMPORTANCE ----------------
+    elif page == "🔍 Feature Importance":
+
+        st.header("🔍 Random Forest Feature Importance")
+
+        st.info(
+            "Feature importance is unavailable for uploaded datasets. The stored "
+            "values belong to the original trained model, and no model has been "
+            "trained or validated on this file."
+        )
+
+    # ---------------- DATA EXPLORER ----------------
+    elif page == "📋 Data Explorer":
+
+        st.header("📋 Model Dataset Explorer")
+
+        st.write(f"Total records: **{len(ud):,}**")
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Rows", f"{ud.shape[0]:,}")
+        col2.metric("Columns", f"{ud.shape[1]}")
+        col3.metric("Missing Values", f"{int(ud.isna().sum().sum()):,}")
+
+        selected_columns = st.multiselect(
+            "Select columns to display",
+            options=ud.columns.tolist(),
+            default=ud.columns.tolist()[:6]
+        )
+
+        if selected_columns:
+            st.dataframe(
+                ud[selected_columns],
+                use_container_width=True,
+                hide_index=True
+            )
+
+        st.subheader("📊 Dataset Statistics")
+        st.dataframe(ud.describe(), use_container_width=True)
+
+        st.download_button(
+            label="⬇️ Download Selected Dataset",
+            data=ud.to_csv(index=False).encode("utf-8"),
+            file_name="uploaded_dataset_cleaned.csv",
+            mime="text/csv"
+        )
 
 
 # ============================================================
 # OVERVIEW
 # ============================================================
 
-if page == "🏠 Overview":
+elif page == "🏠 Overview":
 
     st.header("🏠 Project Overview")
 
@@ -312,7 +729,8 @@ if page == "🏠 Overview":
     )
 
     st.bar_chart(
-        comparison_df.set_index("Model")
+        comparison_df.set_index("Model"),
+        color="#6366F1"
     )
 
     st.success(
@@ -373,7 +791,8 @@ elif page == "📈 Stock Analysis":
     st.subheader("💰 Closing Price")
 
     st.line_chart(
-        filtered_df.set_index("Date")["Close"]
+        filtered_df.set_index("Date")["Close"],
+        color="#6366F1"
     )
 
     # --------------------------------------------------------
@@ -396,7 +815,8 @@ elif page == "📈 Stock Analysis":
     st.line_chart(
         filtered_df.set_index("Date")[
             moving_average_columns
-        ]
+        ],
+        color=["#6366F1", "#F59E0B", "#10B981"][:len(moving_average_columns)]
     )
 
     # --------------------------------------------------------
@@ -412,7 +832,8 @@ elif page == "📈 Stock Analysis":
         if "RSI" in filtered_df.columns:
 
             st.line_chart(
-                filtered_df.set_index("Date")["RSI"]
+                filtered_df.set_index("Date")["RSI"],
+                color="#EC4899"
             )
 
     with col2:
@@ -422,7 +843,8 @@ elif page == "📈 Stock Analysis":
         if "Volatility" in filtered_df.columns:
 
             st.line_chart(
-                filtered_df.set_index("Date")["Volatility"]
+                filtered_df.set_index("Date")["Volatility"],
+                color="#F59E0B"
             )
 
     # --------------------------------------------------------
@@ -434,7 +856,8 @@ elif page == "📈 Stock Analysis":
     if "Volume" in filtered_df.columns:
 
         st.bar_chart(
-            filtered_df.set_index("Date")["Volume"]
+            filtered_df.set_index("Date")["Volume"],
+            color="#8B5CF6"
         )
 
     # --------------------------------------------------------
@@ -545,7 +968,7 @@ elif page == "📰 Sentiment Analysis":
         }
     )
 
-    st.bar_chart(distribution)
+    st.bar_chart(distribution, color="#6366F1")
 
     # --------------------------------------------------------
     # SENTIMENT SCORE
@@ -562,7 +985,8 @@ elif page == "📰 Sentiment Analysis":
         if not score_df.empty:
 
             st.line_chart(
-                score_df.set_index("Date")
+                score_df.set_index("Date"),
+                color="#10B981"
             )
 
     # --------------------------------------------------------
@@ -578,7 +1002,8 @@ elif page == "📰 Sentiment Analysis":
             st.line_chart(
                 daily_sentiment_df.set_index("Date")[
                     "Daily_Sentiment"
-                ]
+                ],
+                color="#7C3AED"
             )
 
         # ----------------------------------------------------
@@ -592,7 +1017,8 @@ elif page == "📰 Sentiment Analysis":
             st.bar_chart(
                 daily_sentiment_df.set_index("Date")[
                     "News_Count"
-                ]
+                ],
+                color="#6366F1"
             )
 
     # --------------------------------------------------------
@@ -741,7 +1167,7 @@ elif page == "🤖 Prediction":
             "Predicted"
         ]
 
-        st.line_chart(chart_df)
+        st.line_chart(chart_df, color=["#6366F1", "#F43F5E"])
 
         # ----------------------------------------------------
         # ERROR
@@ -763,7 +1189,8 @@ elif page == "🤖 Prediction":
         ].dropna()
 
         st.line_chart(
-            error_chart.set_index("Date")
+            error_chart.set_index("Date"),
+            color="#F43F5E"
         )
 
     else:
@@ -860,7 +1287,8 @@ elif page == "🔍 Feature Importance":
     st.subheader("📊 Feature Importance Ranking")
 
     st.bar_chart(
-        importance_df.set_index("Feature")
+        importance_df.set_index("Feature"),
+        color="#8B5CF6"
     )
 
     # --------------------------------------------------------
@@ -986,20 +1414,3 @@ elif page == "📋 Data Explorer":
         file_name="reliance_model_dataset.csv",
         mime="text/csv"
     )
-
-
-# ============================================================
-# FOOTER
-# ============================================================
-
-st.sidebar.divider()
-
-st.sidebar.markdown(
-    """
-    **Stock Market Sentiment + Price Prediction**
-
-    Reliance Industries
-
-    FinBERT + Random Forest
-    """
-)
